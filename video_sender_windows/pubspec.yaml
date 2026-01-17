@@ -1,0 +1,9 @@
+name: video_sender_windows
+description: Windows H.264 Video Sender for Android Testing
+version: 1.0.0
+
+environment:
+  sdk: ^3.0.0
+
+dependencies:
+  image: ^4.0.0
