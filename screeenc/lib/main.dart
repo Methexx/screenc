@@ -277,12 +277,13 @@ class _ReceiverScreenState extends State<ReceiverScreen> {
   }
 
   Widget _buildMainView() {
-    return Padding(
-      padding: const EdgeInsets.all(24.0),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
+    return SingleChildScrollView(
+      child: Padding(
+        padding: const EdgeInsets.all(24.0),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
           // Status Card
           Card(
             elevation: 8,
@@ -354,7 +355,7 @@ class _ReceiverScreenState extends State<ReceiverScreen> {
               ),
             ),
           ),
-          const Spacer(),
+          const SizedBox(height: 24),
 
           // Control Buttons
           Row(
@@ -432,6 +433,7 @@ class _ReceiverScreenState extends State<ReceiverScreen> {
             ),
           ),
         ],
+      ),
       ),
     );
   }

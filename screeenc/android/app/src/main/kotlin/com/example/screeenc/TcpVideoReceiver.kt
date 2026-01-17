@@ -44,11 +44,14 @@ class TcpVideoReceiver(
             Log.i(TAG, "InetSocketAddress created: ${address.hostString}:${address.port}")
 
             socket = Socket().apply {
-                soTimeout = CONNECTION_TIMEOUT
+                // IMPORTANT: Only set timeout during connection, NOT for reading
+                // Keep reading indefinitely without timeout
                 keepAlive = true
                 tcpNoDelay = true // Disable Nagle's algorithm for lower latency
                 Log.i(TAG, "About to connect to: ${address.hostString}:${address.port}")
                 connect(address, CONNECTION_TIMEOUT)
+                // After connection, disable read timeout
+                soTimeout = 0 // 0 = infinite timeout for reading
             }
 
             inputStream = socket?.getInputStream()
@@ -81,64 +84,107 @@ class TcpVideoReceiver(
     }
 
     /**
-     * Main receive loop - reads H.264 NAL units from stream
+     * Main receive loop - reads H.264 stream and extracts NAL units
      */
     private suspend fun receiveVideoStream() {
         val buffer = ByteArray(BUFFER_SIZE)
-        val frameBuffer = mutableListOf<Byte>()
-        var nalStartFound = false
-
+        val accumulator = mutableListOf<Byte>()
+        
         try {
+            var totalBytesReceived = 0L
+            var nalCount = 0
+            
+            Log.i(TAG, "=== Starting receive loop ===")
+            
             while (isRunning && !Thread.currentThread().isInterrupted) {
                 val stream = inputStream ?: break
                 val bytesRead = stream.read(buffer)
 
                 if (bytesRead <= 0) {
-                    Log.w(TAG, "Stream ended or connection closed")
+                    Log.w(TAG, "Stream ended or connection closed after $totalBytesReceived bytes")
                     break
                 }
 
-                // Process received bytes and extract H.264 NAL units
-                for (i in 0 until bytesRead) {
-                    frameBuffer.add(buffer[i])
+                totalBytesReceived += bytesRead
+                Log.v(TAG, "Received $bytesRead bytes (total: $totalBytesReceived)")
 
-                    // Look for NAL start codes (0x00 0x00 0x00 0x01 or 0x00 0x00 0x01)
-                    if (isNalStartCode(frameBuffer)) {
-                        if (nalStartFound && frameBuffer.size > NAL_START_CODE_SIZE) {
-                            // Extract the previous NAL unit (excluding current start code)
-                            val nalUnit = frameBuffer.dropLast(NAL_START_CODE_SIZE).toByteArray()
-                            if (nalUnit.isNotEmpty()) {
-                                withContext(Dispatchers.Main) {
-                                    onFrameReceived?.invoke(nalUnit)
-                                }
-                            }
-                            frameBuffer.clear()
-                            // Keep the current start code
-                            for (j in 0 until NAL_START_CODE_SIZE) {
-                                frameBuffer.add(buffer[i - NAL_START_CODE_SIZE + 1 + j])
-                            }
-                        }
-                        nalStartFound = true
+                // Add all bytes to accumulator
+                for (i in 0 until bytesRead) {
+                    accumulator.add(buffer[i])
+                }
+
+                // Extract complete NAL units (INCLUDING start codes) from accumulator
+                // MediaCodec expects NAL units WITH the 0x00 0x00 0x00 0x01 prefix!
+                val nalPositions = mutableListOf<Int>()
+                
+                // Find all start code positions
+                var pos = 0
+                while (pos < accumulator.size - 3) {
+                    if (accumulator[pos] == 0x00.toByte() && 
+                        accumulator[pos + 1] == 0x00.toByte() &&
+                        accumulator[pos + 2] == 0x00.toByte() &&
+                        accumulator[pos + 3] == 0x01.toByte()) {
+                        nalPositions.add(pos)
+                        pos += 4
+                    } else {
+                        pos++
                     }
                 }
-            }
-
-            // Process any remaining data
-            if (frameBuffer.isNotEmpty()) {
-                val nalUnit = frameBuffer.toByteArray()
-                withContext(Dispatchers.Main) {
-                    onFrameReceived?.invoke(nalUnit)
+                
+                // Extract complete NALs (from one start code to the next)
+                if (nalPositions.size >= 2) {
+                    // We have at least 2 start codes, so we can extract complete NALs
+                    for (i in 0 until nalPositions.size - 1) {
+                        val startPos = nalPositions[i]
+                        val endPos = nalPositions[i + 1]
+                        
+                        // Extract NAL INCLUDING start code
+                        val nalBytes = ByteArray(endPos - startPos)
+                        for (j in startPos until endPos) {
+                            nalBytes[j - startPos] = accumulator[j]
+                        }
+                        
+                        if (nalBytes.size > 4) {
+                            val nalType = nalBytes[4].toInt() and 0x1F
+                            Log.i(TAG, ">>> Extracted NAL #${nalCount}: ${nalBytes.size} bytes, type=$nalType")
+                            try {
+                                withContext(Dispatchers.Main) {
+                                    onFrameReceived?.invoke(nalBytes)
+                                }
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Error invoking callback: ${e.message}", e)
+                            }
+                            nalCount++
+                        }
+                    }
+                    
+                    // Keep only the last incomplete NAL in accumulator
+                    val lastStart = nalPositions.last()
+                    val remaining = accumulator.subList(lastStart, accumulator.size).toMutableList()
+                    accumulator.clear()
+                    accumulator.addAll(remaining)
                 }
             }
+
+            // Send any remaining NAL data
+            if (accumulator.isNotEmpty()) {
+                val finalNal = accumulator.toByteArray()
+                Log.i(TAG, "Final NAL #${nalCount}: ${finalNal.size} bytes")
+                withContext(Dispatchers.Main) {
+                    onFrameReceived?.invoke(finalNal)
+                }
+            }
+            
+            Log.i(TAG, "=== Receive loop ended: received $totalBytesReceived bytes, processed $nalCount NALs ===")
         } catch (e: IOException) {
             if (isRunning) {
-                Log.e(TAG, "Error receiving stream", e)
+                Log.e(TAG, "Error receiving stream: ${e.message}", e)
                 withContext(Dispatchers.Main) {
                     onError?.invoke("Stream error: ${e.message}")
                 }
             }
         } finally {
-            Log.i(TAG, "Receive loop ended")
+            Log.i(TAG, "Receive loop finally block")
         }
     }
 

@@ -54,7 +54,8 @@ class H264Decoder(private val surface: Surface) {
 
     /**
      * Decode a single H.264 frame (NAL unit)
-     * @param frameData The raw H.264 encoded frame data
+     * NAL unit MUST include the 0x00 0x00 0x00 0x01 start code prefix
+     * @param frameData The raw H.264 encoded frame data WITH start code
      * @param presentationTimeUs Presentation timestamp in microseconds
      */
     fun decodeFrame(frameData: ByteArray, presentationTimeUs: Long = System.nanoTime() / 1000) {
@@ -62,6 +63,24 @@ class H264Decoder(private val surface: Surface) {
             Log.w(TAG, "Decoder not configured")
             return
         }
+
+        // Validate NAL unit has start code
+        if (frameData.size < 5) {
+            Log.w(TAG, "Frame too small: ${frameData.size} bytes")
+            return
+        }
+        
+        // Log NAL type for debugging
+        val nalType = if (frameData.size > 4) frameData[4].toInt() and 0x1F else -1
+        val nalTypeName = when (nalType) {
+            1 -> "P-slice"
+            5 -> "IDR (I-frame)"
+            6 -> "SEI"
+            7 -> "SPS"
+            8 -> "PPS"
+            else -> "type=$nalType"
+        }
+        Log.d(TAG, "Decoding NAL: ${frameData.size} bytes, $nalTypeName")
 
         try {
             val codec = mediaCodec ?: return
@@ -73,14 +92,23 @@ class H264Decoder(private val surface: Surface) {
                 inputBuffer?.clear()
                 inputBuffer?.put(frameData)
 
+                // Set CODEC_CONFIG flag for SPS/PPS
+                val flags = when (nalType) {
+                    7, 8 -> MediaCodec.BUFFER_FLAG_CODEC_CONFIG
+                    else -> 0
+                }
+
                 // Queue the input buffer with the encoded data
                 codec.queueInputBuffer(
                     inputBufferIndex,
                     0,
                     frameData.size,
                     presentationTimeUs,
-                    0
+                    flags
                 )
+                Log.v(TAG, "Queued: ${frameData.size} bytes, $nalTypeName, flags=$flags")
+            } else {
+                Log.w(TAG, "No input buffer available (index=$inputBufferIndex)")
             }
 
             // Dequeue output buffer and render to surface
@@ -88,19 +116,25 @@ class H264Decoder(private val surface: Surface) {
             var outputBufferIndex = codec.dequeueOutputBuffer(bufferInfo, TIMEOUT_US)
 
             while (outputBufferIndex >= 0) {
-                // Render decoded frame to surface
+                // Render decoded frame to surface (true = render)
                 codec.releaseOutputBuffer(outputBufferIndex, true)
+                Log.i(TAG, "*** RENDERED frame to surface, size=${bufferInfo.size}, flags=${bufferInfo.flags}")
 
                 // Check for more output buffers
                 outputBufferIndex = codec.dequeueOutputBuffer(bufferInfo, 0)
             }
 
-            if (outputBufferIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                val newFormat = codec.outputFormat
-                Log.d(TAG, "Output format changed: $newFormat")
+            when (outputBufferIndex) {
+                MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                    val newFormat = codec.outputFormat
+                    Log.i(TAG, "Output format changed: $newFormat")
+                }
+                MediaCodec.INFO_TRY_AGAIN_LATER -> {
+                    // Normal - no output available yet
+                }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error decoding frame", e)
+            Log.e(TAG, "Error decoding frame: ${e.message}", e)
         }
     }
 
