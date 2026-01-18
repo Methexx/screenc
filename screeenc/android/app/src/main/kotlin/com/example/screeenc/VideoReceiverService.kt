@@ -94,12 +94,16 @@ class VideoReceiverService : Service() {
                 } else {
                     updateNotification("Disconnected")
                     broadcastStatus("disconnected", message ?: "Connection lost")
+                    // Stop timer on disconnection
+                    stopStreamTimer()
                 }
             }
 
             onError = { error ->
                 Log.e(TAG, "TCP Error: $error")
                 broadcastStatus("error", error)
+                // Stop timer on error
+                stopStreamTimer()
             }
         }
 
@@ -125,6 +129,9 @@ class VideoReceiverService : Service() {
 
         Log.i(TAG, "Stopping video receiver service...")
         isStreaming = false
+        
+        // Stop timer immediately
+        stopStreamTimer()
 
         tcpReceiver?.disconnect()
         tcpReceiver = null
@@ -143,11 +150,16 @@ class VideoReceiverService : Service() {
     private var closeButton: android.widget.Button? = null
     private var portraitButton: android.widget.Button? = null
     private var landscapeButton: android.widget.Button? = null
+    private var timerTextView: android.widget.TextView? = null
     private var isLandscapeMode = false
     private var videoWidth = 1920
     private var videoHeight = 1080
     private var screenWidth = 0
     private var screenHeight = 0
+    
+    // Timer variables
+    private var streamStartTime: Long = 0
+    private var timerJob: kotlinx.coroutines.Job? = null
     
     /**
      * Calculate surface dimensions maintaining aspect ratio
@@ -393,7 +405,36 @@ class VideoReceiverService : Service() {
         }
         
         windowManager?.addView(closeButton, buttonParams)
-        Log.i(TAG, "Control buttons added")
+        
+        // Timer TextView (under close button)
+        timerTextView = android.widget.TextView(this).apply {
+            text = "0.000s"
+            setTextColor(android.graphics.Color.WHITE)
+            textSize = 12f
+            setBackgroundColor(android.graphics.Color.parseColor("#99000000")) // Semi-transparent black
+            setPadding(16, 8, 16, 8)
+            gravity = Gravity.CENTER
+        }
+        
+        val timerParams = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            layoutType,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.END
+            x = 20
+            y = 140  // Below close button
+        }
+        
+        windowManager?.addView(timerTextView, timerParams)
+        
+        // Start timer
+        startStreamTimer()
+        
+        Log.i(TAG, "Control buttons and timer added")
     }
     
     /**
@@ -543,6 +584,21 @@ class VideoReceiverService : Service() {
             }
             closeButton = null
             
+            // Remove timer
+            timerTextView?.let {
+                try {
+                    Log.d(TAG, "Removing timer...")
+                    windowManager?.removeView(it)
+                    Log.d(TAG, "✓ Timer removed")
+                } catch (e: Exception) {
+                    Log.e(TAG, "✗ Error removing timer", e)
+                }
+            }
+            timerTextView = null
+            
+            // Stop timer job
+            stopStreamTimer()
+            
             // Remove surface view (MUST be removed before background view)
             surfaceView?.let {
                 try {
@@ -647,6 +703,35 @@ class VideoReceiverService : Service() {
             putExtra(EXTRA_MESSAGE, message)
         }
         sendBroadcast(intent)
+    }
+    
+    /**
+     * Start streaming timer
+     */
+    private fun startStreamTimer() {
+        streamStartTime = System.currentTimeMillis()
+        timerJob = serviceScope.launch {
+            while (isActive && isStreaming) {  // Check both isActive AND isStreaming
+                val elapsed = System.currentTimeMillis() - streamStartTime
+                val seconds = elapsed / 1000
+                val millis = elapsed % 1000
+                
+                timerTextView?.text = String.format("%d.%03ds", seconds, millis)
+                
+                delay(50) // Update every 50ms for smooth milliseconds
+            }
+            Log.d(TAG, "Stream timer loop ended (isStreaming=$isStreaming)")
+        }
+        Log.d(TAG, "Stream timer started")
+    }
+    
+    /**
+     * Stop streaming timer
+     */
+    private fun stopStreamTimer() {
+        timerJob?.cancel()
+        timerJob = null
+        Log.d(TAG, "Stream timer stopped")
     }
 
     override fun onDestroy() {

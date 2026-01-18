@@ -15,9 +15,20 @@ What it does:
 1) Sets up `adb reverse tcp:27183 tcp:27183`
 2) Captures desktop via FFmpeg (`gdigrab`) at 1920x1080, 30fps
 3) Encodes H.264 (baseline, ultrafast, zerolatency) and listens on `0.0.0.0:27183`
-4) Waits for the Android app to press **Start Receiver**
+4) **Stays running** - port remains open for reconnections
+5) Waits for the Android app to press **Start Receiver**
 
 On the phone: open the Screeenc app → tap **Start Receiver** → your Windows desktop appears. Use the red **✕ CLOSE** to dismiss.
+
+### ✨ Auto-Reconnection Feature
+
+The server **keeps running** and the port stays open even after you stop streaming:
+- ✅ Stop streaming on Android → **server keeps listening**
+- ✅ Start streaming again → **automatically reconnects**
+- ✅ Network error → **handles gracefully, ready for next connection**
+- ✅ No need to restart the Windows sender manually
+
+Just **start the sender once**, and you can start/stop streaming from Android as many times as you want!
 
 ## Legacy Dart sender (optional)
 

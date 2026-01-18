@@ -43,42 +43,68 @@ Write-Host "  Port:       $PORT" -ForegroundColor White
 Write-Host "  Framerate:  $FRAMERATE fps" -ForegroundColor White
 Write-Host "  Bitrate:    $BITRATE" -ForegroundColor White
 Write-Host "  Resolution: $RESOLUTION" -ForegroundColor White
+Write-Host "  Mode:       Auto-reconnect (persistent server)" -ForegroundColor Green
 Write-Host ""
 Write-Host "Starting screen capture server..." -ForegroundColor Green
+Write-Host "Server will keep running and accept reconnections!" -ForegroundColor Cyan
 Write-Host "Waiting for Android device to connect..." -ForegroundColor Yellow
 Write-Host ""
 Write-Host "Press Ctrl+C to stop" -ForegroundColor Gray
 Write-Host ""
 
-# Stream screen using FFmpeg
-# -f gdigrab: Windows screen capture
-# -framerate: Capture frame rate
-# -i desktop: Capture entire desktop
-# -c:v libx264: H.264 encoder
-# -preset ultrafast: Lowest latency
-# -tune zerolatency: Optimize for streaming
-# -profile:v baseline: Most compatible H.264 profile
-# -level 3.1: H.264 level for mobile devices
-# -pix_fmt yuv420p: Standard pixel format
-# -g: GOP size (keyframe interval)
-# -f h264: Raw H.264 output
-# tcp://0.0.0.0:PORT: TCP server mode
-
-ffmpeg -f gdigrab -framerate $FRAMERATE -i desktop `
-    -c:v libx264 `
-    -preset ultrafast `
-    -tune zerolatency `
-    -profile:v baseline `
-    -level 3.1 `
-    -pix_fmt yuv420p `
-    -vf "scale=$RESOLUTION" `
-    -b:v $BITRATE `
-    -maxrate $BITRATE `
-    -bufsize 1M `
-    -g $($FRAMERATE * 2) `
-    -keyint_min $FRAMERATE `
-    -sc_threshold 0 `
-    -f h264 `
-    -fflags nobuffer `
-    -flags low_delay `
-    "tcp://0.0.0.0:${PORT}?listen=1"
+# Loop to restart FFmpeg automatically after disconnection
+$connectionCount = 0
+while ($true) {
+    $connectionCount++
+    Write-Host "[$([DateTime]::Now.ToString('HH:mm:ss'))] Ready for connection #$connectionCount..." -ForegroundColor Yellow
+    
+    # Stream screen using FFmpeg
+    # -f gdigrab: Windows screen capture
+    # -framerate: Capture frame rate
+    # -i desktop: Capture entire desktop
+    # -c:v libx264: H.264 encoder
+    # -preset ultrafast: Lowest latency
+    # -tune zerolatency: Optimize for streaming
+    # -profile:v baseline: Most compatible H.264 profile
+    # -level 3.1: H.264 level for mobile devices
+    # -pix_fmt yuv420p: Standard pixel format
+    # -g: GOP size (keyframe interval)
+    # -f h264: Raw H.264 output
+    # tcp://0.0.0.0:PORT?listen=1: TCP server mode
+    
+    ffmpeg -f gdigrab -framerate $FRAMERATE -i desktop `
+        -c:v libx264 `
+        -preset ultrafast `
+        -tune zerolatency `
+        -profile:v baseline `
+        -level 3.1 `
+        -pix_fmt yuv420p `
+        -vf "scale=$RESOLUTION" `
+        -b:v $BITRATE `
+        -maxrate $BITRATE `
+        -bufsize 1M `
+        -g $($FRAMERATE * 2) `
+        -keyint_min $FRAMERATE `
+        -sc_threshold 0 `
+        -f h264 `
+        -fflags nobuffer `
+        -flags low_delay `
+        "tcp://0.0.0.0:${PORT}?listen=1" 2>&1 | ForEach-Object {
+            # Filter FFmpeg output to reduce noise
+            if ($_ -match "frame=|speed=|bitrate=") {
+                Write-Host $_ -ForegroundColor Gray
+            } elseif ($_ -match "error|Error|ERROR") {
+                Write-Host $_ -ForegroundColor Red
+            }
+        }
+    
+    # Check if user pressed Ctrl+C
+    if ($LASTEXITCODE -eq -1073741510) {
+        Write-Host "`nServer stopped by user." -ForegroundColor Yellow
+        break
+    }
+    
+    Write-Host "`n[$([DateTime]::Now.ToString('HH:mm:ss'))] Connection #$connectionCount ended. Restarting in 2 seconds..." -ForegroundColor Cyan
+    Write-Host "Ready for next Android connection...`n" -ForegroundColor Green
+    Start-Sleep -Seconds 2
+}

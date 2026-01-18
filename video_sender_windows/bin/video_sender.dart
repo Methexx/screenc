@@ -36,45 +36,87 @@ void main(List<String> args) async {
   print('Listening on 0.0.0.0:$SEND_PORT');
   print('Waiting for Android receiver to connect...');
   print('Frame Rate: $FRAME_RATE fps');
+  print('📡 Server will keep running and accept reconnections');
   print('\nPress Ctrl+C to stop\n');
 
-  final server = await ServerSocket.bind('0.0.0.0', SEND_PORT);
+  final server = await ServerSocket.bind(
+    '0.0.0.0', 
+    SEND_PORT,
+    shared: true, // Allow port reuse
+  );
   
+  int connectionCount = 0;
+  
+  // Keep accepting connections forever
   await for (Socket client in server) {
-    print('[${DateTime.now()}] ✓ Client connected: ${client.remoteAddress.address}:${client.remotePort}');
-    handleClient(client);
+    connectionCount++;
+    print('[${DateTime.now()}] ✓ Client #$connectionCount connected: ${client.remoteAddress.address}:${client.remotePort}');
+    
+    // Handle each client in isolation without blocking new connections
+    handleClient(client, connectionCount);
   }
 }
 
-void handleClient(Socket client) async {
+void handleClient(Socket client, int connectionId) async {
   try {
     int frameCount = 0;
-    bool spsppsSent = false;
+    bool isConnected = true;
+
+    // Listen for disconnection
+    client.listen(
+      (data) {
+        // Client might send data, just ignore it
+      },
+      onDone: () {
+        isConnected = false;
+        print('[${DateTime.now()}] ℹ️  Client #$connectionId closed connection gracefully');
+      },
+      onError: (error) {
+        isConnected = false;
+        print('[${DateTime.now()}] ⚠️  Client #$connectionId error: $error');
+      },
+      cancelOnError: true,
+    );
 
     // Send SPS and PPS first
     client.add(SPS_NAL);
     client.add(PPS_NAL);
-    spsppsSent = true;
-    print('[${DateTime.now()}] 📤 Sent SPS & PPS');
+    await client.flush();
+    print('[${DateTime.now()}] 📤 Sent SPS & PPS to client #$connectionId');
 
     // Stream frames at specified frame rate
-    while (true) {
-      // Send IDR frame
-      client.add(IDR_NAL);
-      frameCount++;
+    while (isConnected) {
+      try {
+        // Send IDR frame
+        client.add(IDR_NAL);
+        frameCount++;
 
-      // Log every 30 frames (1 second at 30 fps)
-      if (frameCount % 30 == 0) {
-        print('[${DateTime.now()}] 📹 Sent $frameCount frames (${frameCount ~/ 30}s)');
+        // Log every 30 frames (1 second at 30 fps)
+        if (frameCount % 30 == 0) {
+          print('[${DateTime.now()}] 📹 Client #$connectionId: Sent $frameCount frames (${frameCount ~/ 30}s)');
+        }
+
+        // Flush to ensure data is sent
+        await client.flush();
+
+        // Wait for next frame interval
+        await Future.delayed(Duration(milliseconds: FRAME_INTERVAL_MS));
+      } catch (e) {
+        // Socket closed or error during write
+        isConnected = false;
+        break;
       }
-
-      // Wait for next frame interval
-      await Future.delayed(Duration(milliseconds: FRAME_INTERVAL_MS));
     }
   } catch (e) {
-    print('[${DateTime.now()}] ❌ Client error: $e');
+    print('[${DateTime.now()}] ❌ Client #$connectionId unexpected error: $e');
   } finally {
-    print('[${DateTime.now()}] ✗ Client disconnected');
-    await client.close();
+    print('[${DateTime.now()}] ✗ Client #$connectionId disconnected (Total frames sent: ${0})');
+    print('[${DateTime.now()}] 🔄 Ready for next connection...\n');
+    
+    try {
+      await client.close();
+    } catch (e) {
+      // Ignore close errors
+    }
   }
 }
