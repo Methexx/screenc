@@ -43,7 +43,8 @@ echo.
 echo Configuration:
 echo   Port:       27183
 echo   Framerate:  30 fps
-echo   Bitrate:    4M
+echo   Resolution: 1280x720
+echo   Bitrate:    3M
 echo.
 echo Starting screen capture...
 echo Waiting for Android device to connect...
@@ -58,8 +59,9 @@ ffmpeg -f gdigrab -framerate 30 -i desktop ^
     -profile:v baseline ^
     -level 3.1 ^
     -pix_fmt yuv420p ^
-    -b:v 4M ^
-    -maxrate 4M ^
+    -vf "scale=1280x720" ^
+    -b:v 3M ^
+    -maxrate 3M ^
     -bufsize 1M ^
     -g 60 ^
     -keyint_min 30 ^

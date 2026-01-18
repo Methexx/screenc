@@ -3,8 +3,10 @@
 
 $PORT = 27183
 $FRAMERATE = 30
-$BITRATE = "4M"
-$RESOLUTION = "1920x1080"
+# Lower bitrate to reduce data usage at 720p
+$BITRATE = "3M"
+# Force scaled output resolution to 720p
+$RESOLUTION = "1280x720"
 
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "   Windows Screen Streamer (FFmpeg)" -ForegroundColor Cyan
@@ -69,6 +71,7 @@ ffmpeg -f gdigrab -framerate $FRAMERATE -i desktop `
     -profile:v baseline `
     -level 3.1 `
     -pix_fmt yuv420p `
+    -vf "scale=$RESOLUTION" `
     -b:v $BITRATE `
     -maxrate $BITRATE `
     -bufsize 1M `
