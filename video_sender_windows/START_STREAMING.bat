@@ -1,4 +1,9 @@
 @echo off
+setlocal
+
+REM Always run from this folder so paths work when double-clicked
+cd /d "%~dp0"
+
 title Windows Screen Streamer
 echo ========================================
 echo    Windows Screen Streamer (FFmpeg)
@@ -6,6 +11,7 @@ echo ========================================
 echo.
 
 REM Check FFmpeg
+echo Checking FFmpeg in PATH...
 where ffmpeg >nul 2>&1
 if %ERRORLEVEL% neq 0 (
     echo ERROR: FFmpeg not found!
@@ -21,6 +27,13 @@ if %ERRORLEVEL% neq 0 (
 
 echo FFmpeg found!
 echo.
+
+REM Optional: hint ADB presence
+where adb >nul 2>&1
+if %ERRORLEVEL% neq 0 (
+    echo WARNING: adb not found in PATH. Install platform-tools or open from Android SDK folder.
+    echo.
+)
 
 REM Setup ADB reverse
 echo Setting up ADB reverse port forwarding...
@@ -57,3 +70,4 @@ ffmpeg -f gdigrab -framerate 30 -i desktop ^
     "tcp://0.0.0.0:27183?listen=1"
 
 pause
+endlocal
