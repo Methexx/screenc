@@ -4,6 +4,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.ActivityInfo
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
@@ -21,13 +22,15 @@ class MainActivity : FlutterActivity() {
 
     private var statusEventSink: EventChannel.EventSink? = null
     private var statusReceiver: BroadcastReceiver? = null
+    private var orientationReceiver: BroadcastReceiver? = null
+    private var methodChannel: MethodChannel? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
         // Method Channel - for commands from Flutter to Android
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, METHOD_CHANNEL)
-            .setMethodCallHandler { call, result ->
+        methodChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, METHOD_CHANNEL).apply {
+            setMethodCallHandler { call, result ->
                 when (call.method) {
                     "startReceiver" -> {
                         startReceiverService()
@@ -49,6 +52,7 @@ class MainActivity : FlutterActivity() {
                     }
                 }
             }
+        }
 
         // Event Channel - for status updates from Android to Flutter
         EventChannel(flutterEngine.dartExecutor.binaryMessenger, EVENT_CHANNEL)
@@ -70,6 +74,7 @@ class MainActivity : FlutterActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Log.i(TAG, "MainActivity created")
+        registerOrientationReceiver()
     }
 
     /**
@@ -115,6 +120,56 @@ class MainActivity : FlutterActivity() {
         }
         statusReceiver = null
     }
+    
+    /**
+     * Register orientation change broadcast receiver
+     */
+    private fun registerOrientationReceiver() {
+        orientationReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                val landscape = intent.getBooleanExtra("landscape", false)
+                Log.i(TAG, ">>> Orientation change broadcast received: ${if (landscape) "LANDSCAPE" else "PORTRAIT"}")
+                
+                // Change activity orientation
+                val newOrientation = if (landscape) {
+                    ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+                } else {
+                    ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                }
+                
+                Log.i(TAG, "Setting activity requestedOrientation to: ${if (landscape) "LANDSCAPE" else "PORTRAIT"}")
+                requestedOrientation = newOrientation
+                Log.i(TAG, "✓ Activity orientation changed")
+                
+                // Notify Flutter
+                Log.i(TAG, "Invoking Flutter setOrientation method...")
+                methodChannel?.invokeMethod("setOrientation", mapOf("landscape" to landscape))
+                Log.i(TAG, "✓ Flutter notified of orientation change")
+            }
+        }
+        
+        val filter = IntentFilter("com.example.screeenc.ORIENTATION_CHANGE")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(orientationReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(orientationReceiver, filter)
+        }
+        Log.i(TAG, "✓ Orientation receiver registered and ready")
+    }
+    
+    /**
+     * Unregister orientation receiver
+     */
+    private fun unregisterOrientationReceiver() {
+        orientationReceiver?.let {
+            try {
+                unregisterReceiver(it)
+            } catch (e: Exception) {
+                Log.e(TAG, "Error unregistering orientation receiver", e)
+            }
+        }
+        orientationReceiver = null
+    }
 
     /**
      * Start the video receiver service
@@ -159,6 +214,7 @@ class MainActivity : FlutterActivity() {
     override fun onDestroy() {
         super.onDestroy()
         unregisterStatusReceiver()
+        unregisterOrientationReceiver()
         Log.i(TAG, "MainActivity destroyed")
     }
 }

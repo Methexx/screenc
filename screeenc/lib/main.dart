@@ -41,13 +41,30 @@ class _ReceiverScreenState extends State<ReceiverScreen> {
   int _frameCount = 0;
   DateTime? _lastUpdate;
   bool _showLogs = false;
+  bool _isLandscape = false;
 
   @override
   void initState() {
     super.initState();
     appLog.info('App', 'Screen Receiver initialized');
+    // Set initial portrait orientation
+    SystemChrome.setPreferredOrientations([
+      DeviceOrientation.portraitUp,
+      DeviceOrientation.portraitDown,
+    ]);
     _requestPermissions();
     _listenToStatusUpdates();
+    _setupOrientationListener();
+  }
+  
+  /// Listen to orientation change broadcasts from the service
+  void _setupOrientationListener() {
+    methodChannel.setMethodCallHandler((call) async {
+      if (call.method == 'setOrientation') {
+        final landscape = call.arguments['landscape'] as bool? ?? false;
+        await _setOrientation(landscape);
+      }
+    });
   }
 
   /// Request necessary permissions
@@ -80,9 +97,11 @@ class _ReceiverScreenState extends State<ReceiverScreen> {
             _lastUpdate = DateTime.now();
 
             // Update streaming state based on status
-            _isStreaming = _status == 'connected';
-            if (_isStreaming) {
+            if (_status.toLowerCase() == 'connected') {
+              _isStreaming = true;
               _frameCount++;
+            } else if (_status.toLowerCase() == 'disconnected' || _status.toLowerCase() == 'stopped') {
+              _isStreaming = false;
             }
           });
         }
@@ -107,6 +126,7 @@ class _ReceiverScreenState extends State<ReceiverScreen> {
       setState(() {
         _status = 'Starting...';
         _statusMessage = 'Connecting to Windows host';
+        _isStreaming = true; // Enable streaming UI immediately
       });
     } on PlatformException catch (e) {
       appLog.error('Receiver', 'Failed to start: ${e.message}');
@@ -123,6 +143,8 @@ class _ReceiverScreenState extends State<ReceiverScreen> {
       appLog.info('Receiver', 'Stopping video receiver service...');
       await methodChannel.invokeMethod('stopReceiver');
       appLog.info('Receiver', 'Stop command sent successfully');
+      // Reset orientation to portrait when stopping
+      await _setOrientation(false);
       setState(() {
         _status = 'Stopping...';
         _statusMessage = 'Disconnecting';
@@ -134,6 +156,31 @@ class _ReceiverScreenState extends State<ReceiverScreen> {
         _status = 'Error';
         _statusMessage = 'Failed to stop: ${e.message}';
       });
+    }
+  }
+
+  /// Set screen orientation
+  Future<void> _setOrientation(bool landscape) async {
+    try {
+      if (landscape) {
+        appLog.info('Orientation', 'Switching to landscape mode');
+        await SystemChrome.setPreferredOrientations([
+          DeviceOrientation.landscapeLeft,
+          DeviceOrientation.landscapeRight,
+        ]);
+      } else {
+        appLog.info('Orientation', 'Switching to portrait mode');
+        await SystemChrome.setPreferredOrientations([
+          DeviceOrientation.portraitUp,
+          DeviceOrientation.portraitDown,
+        ]);
+      }
+      setState(() {
+        _isLandscape = landscape;
+      });
+      appLog.info('Orientation', 'Orientation changed to ${landscape ? "landscape" : "portrait"}');
+    } catch (e) {
+      appLog.error('Orientation', 'Failed to change orientation: $e');
     }
   }
 
@@ -364,7 +411,7 @@ class _ReceiverScreenState extends State<ReceiverScreen> {
                 child: ElevatedButton.icon(
                   onPressed: _isStreaming ? null : _startReceiver,
                   icon: const Icon(Icons.play_arrow),
-                  label: const Text('Start Receiver'),
+                  label: const Text('Start'),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.green,
                     foregroundColor: Colors.white,
@@ -375,12 +422,12 @@ class _ReceiverScreenState extends State<ReceiverScreen> {
                   ),
                 ),
               ),
-              const SizedBox(width: 16),
+              const SizedBox(width: 12),
               Expanded(
                 child: ElevatedButton.icon(
                   onPressed: _isStreaming ? _stopReceiver : null,
                   icon: const Icon(Icons.stop),
-                  label: const Text('Stop Receiver'),
+                  label: const Text('Stop'),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.red,
                     foregroundColor: Colors.white,
@@ -393,6 +440,46 @@ class _ReceiverScreenState extends State<ReceiverScreen> {
               ),
             ],
           ),
+          
+          // Orientation Control Buttons (only visible when streaming)
+          if (_isStreaming) ...[
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: _isLandscape ? null : () => _setOrientation(false),
+                    icon: const Icon(Icons.stay_current_portrait, size: 20),
+                    label: const Text('Portrait'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: _isLandscape ? Colors.grey : Colors.blue,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: _isLandscape ? null : () => _setOrientation(true),
+                    icon: const Icon(Icons.stay_current_landscape, size: 20),
+                    label: const Text('Landscape'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: _isLandscape ? Colors.blue : Colors.grey,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
           const SizedBox(height: 16),
 
           // Instructions

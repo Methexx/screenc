@@ -38,6 +38,7 @@ class VideoReceiverService : Service() {
     private var tcpReceiver: TcpVideoReceiver? = null
     private var h264Decoder: H264Decoder? = null
     private var surfaceView: SurfaceView? = null
+    private var backgroundView: android.view.View? = null
     private var windowManager: WindowManager? = null
     
     private var isStreaming = false
@@ -140,19 +141,77 @@ class VideoReceiverService : Service() {
     }
 
     private var closeButton: android.widget.Button? = null
+    private var portraitButton: android.widget.Button? = null
+    private var landscapeButton: android.widget.Button? = null
+    private var isLandscapeMode = false
+    private var videoWidth = 1920
+    private var videoHeight = 1080
+    private var screenWidth = 0
+    private var screenHeight = 0
+    
+    /**
+     * Calculate surface dimensions maintaining aspect ratio
+     * Returns: IntArray with [width, height, offsetX, offsetY]
+     */
+    private fun calculateSurfaceDimensions(): IntArray {
+        // Video aspect ratio (1920x1080 = 16:9 ≈ 1.777)
+        val videoAspect = videoWidth.toFloat() / videoHeight.toFloat()
+        val screenAspect = screenWidth.toFloat() / screenHeight.toFloat()
+        
+        Log.i(TAG, "calculateSurfaceDimensions: videoAspect=$videoAspect (16/9=${16f/9f}), screenAspect=$screenAspect")
+        Log.i(TAG, "Screen: ${screenWidth}x${screenHeight}, Video: ${videoWidth}x${videoHeight}")
+        Log.i(TAG, "isLandscape=$isLandscapeMode")
+        
+        var surfaceWidth: Int
+        var surfaceHeight: Int
+        var offsetX: Int
+        var offsetY: Int
+        
+        if (videoAspect > screenAspect) {
+            // Video is wider than screen (letterbox - black bars top/bottom)
+            // Scale to full width, height adjusted for aspect ratio
+            surfaceWidth = screenWidth
+            surfaceHeight = (screenWidth / videoAspect).toInt()
+            offsetX = 0
+            offsetY = (screenHeight - surfaceHeight) / 2
+            Log.i(TAG, "Letterbox mode: scaling to full width ${screenWidth}px")
+        } else {
+            // Video is narrower than screen (pillarbox - black bars left/right)
+            // Scale to full height, width adjusted for aspect ratio
+            surfaceHeight = screenHeight
+            surfaceWidth = (surfaceHeight * videoAspect).toInt()
+            offsetX = (screenWidth - surfaceWidth) / 2
+            offsetY = 0
+            Log.i(TAG, "Pillarbox mode: scaling to full height ${screenHeight}px")
+        }
+        
+        Log.i(TAG, "FINAL: ${surfaceWidth}x${surfaceHeight} at offset ($offsetX, $offsetY)")
+        return intArrayOf(surfaceWidth, surfaceHeight, offsetX, offsetY)
+    }
 
     /**
-     * Create floating surface view for video rendering with close button
+     * Create floating surface view for video rendering with control buttons
      */
     private fun createSurfaceView() {
         try {
+            // Set initial orientation to portrait
+            setOrientation(false)
+            
             windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
             
             // Get screen dimensions
             val displayMetrics = resources.displayMetrics
-            val screenWidth = displayMetrics.widthPixels
-            val screenHeight = displayMetrics.heightPixels
+            screenWidth = displayMetrics.widthPixels
+            screenHeight = displayMetrics.heightPixels
             Log.i(TAG, "Screen size: ${screenWidth}x${screenHeight}")
+            
+            // Calculate surface dimensions based on aspect ratio
+            val dimensions = calculateSurfaceDimensions()
+            val surfaceWidth = dimensions[0]
+            val surfaceHeight = dimensions[1]
+            val offsetX = dimensions[2]
+            val offsetY = dimensions[3]
+            Log.i(TAG, "Surface dimensions: ${surfaceWidth}x${surfaceHeight}, offset: ($offsetX, $offsetY)")
 
             surfaceView = SurfaceView(this).apply {
                 // CRITICAL: setZOrderOnTop makes overlay appear above other windows
@@ -165,7 +224,7 @@ class VideoReceiverService : Service() {
                         
                         // Initialize decoder with surface - decoder will render directly
                         h264Decoder = H264Decoder(holder.surface).apply {
-                            configure(screenWidth, screenHeight)
+                            configure(videoWidth, videoHeight)
                         }
                         Log.i(TAG, "Decoder initialized and ready to render")
                     }
@@ -181,19 +240,44 @@ class VideoReceiverService : Service() {
                     }
                 })
             }
-
-            // Create overlay window parameters - TYPE_APPLICATION_OVERLAY goes on top of everything
+            
+            // Create black background container
+            backgroundView = android.view.View(this).apply {
+                setBackgroundColor(android.graphics.Color.BLACK)
+            }
+            
+            val bgParams = WindowManager.LayoutParams(
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.MATCH_PARENT,
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                } else {
+                    @Suppress("DEPRECATION")
+                    WindowManager.LayoutParams.TYPE_SYSTEM_ALERT
+                },
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                        WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                        WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                        WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON,
+                PixelFormat.OPAQUE
+            ).apply {
+                gravity = Gravity.TOP or Gravity.START
+                x = 0
+                y = 0
+            }
+            windowManager?.addView(backgroundView, bgParams)
+            
+            // Add surface view on top with proper dimensions and offset
             val layoutType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
             } else {
                 @Suppress("DEPRECATION")
                 WindowManager.LayoutParams.TYPE_SYSTEM_ALERT
             }
-
-            // Use full screen dimensions - TRANSLUCENT to work with setZOrderOnTop
+            
             val params = WindowManager.LayoutParams(
-                WindowManager.LayoutParams.MATCH_PARENT,
-                WindowManager.LayoutParams.MATCH_PARENT,
+                surfaceWidth,
+                surfaceHeight,
                 layoutType,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                         WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
@@ -203,15 +287,15 @@ class VideoReceiverService : Service() {
                 PixelFormat.TRANSLUCENT
             ).apply {
                 gravity = Gravity.TOP or Gravity.START
-                x = 0
-                y = 0
+                x = offsetX
+                y = offsetY
             }
 
             windowManager?.addView(surfaceView, params)
             Log.i(TAG, "Surface view added to window manager at ${screenWidth}x${screenHeight}")
             
-            // Create close button overlay
-            createCloseButton(layoutType)
+            // Create control buttons overlay
+            createControlButtons(layoutType)
             
         } catch (e: Exception) {
             Log.e(TAG, "Failed to create surface view", e)
@@ -220,9 +304,68 @@ class VideoReceiverService : Service() {
     }
 
     /**
-     * Create a floating close button
+     * Create control buttons (Portrait, Landscape, Close)
      */
-    private fun createCloseButton(layoutType: Int) {
+    private fun createControlButtons(layoutType: Int) {
+        // Portrait Button
+        portraitButton = android.widget.Button(this).apply {
+            text = "📱 Portrait"
+            setBackgroundColor(android.graphics.Color.parseColor("#2196F3")) // Blue when active
+            setTextColor(android.graphics.Color.WHITE)
+            textSize = 13f
+            setPadding(20, 10, 20, 10)
+            
+            setOnClickListener {
+                Log.i(TAG, "Portrait button pressed")
+                setOrientation(false)
+            }
+        }
+        
+        val portraitParams = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            layoutType,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = 20
+            y = 80  // Below status bar
+        }
+        
+        windowManager?.addView(portraitButton, portraitParams)
+        
+        // Landscape Button
+        landscapeButton = android.widget.Button(this).apply {
+            text = "🖥️ Landscape"
+            setBackgroundColor(android.graphics.Color.parseColor("#757575")) // Gray when inactive
+            setTextColor(android.graphics.Color.WHITE)
+            textSize = 13f
+            setPadding(20, 10, 20, 10)
+            
+            setOnClickListener {
+                Log.i(TAG, "Landscape button pressed")
+                setOrientation(true)
+            }
+        }
+        
+        val landscapeParams = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            layoutType,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = 200  // Next to portrait button
+            y = 80
+        }
+        
+        windowManager?.addView(landscapeButton, landscapeParams)
+        
+        // Close Button
         closeButton = android.widget.Button(this).apply {
             text = "✕ CLOSE"
             setBackgroundColor(android.graphics.Color.parseColor("#CC0000"))
@@ -250,25 +393,183 @@ class VideoReceiverService : Service() {
         }
         
         windowManager?.addView(closeButton, buttonParams)
-        Log.i(TAG, "Close button added")
+        Log.i(TAG, "Control buttons added")
+    }
+    
+    /**
+     * Set screen orientation and update UI
+     */
+    private fun setOrientation(landscape: Boolean) {
+        isLandscapeMode = landscape
+        
+        Log.i(TAG, ">>> setOrientation called: landscape=$landscape <<<")
+        Log.i(TAG, "Current screen before orientation: ${screenWidth}x${screenHeight}")
+        
+        // Request orientation change via broadcast to activity
+        val intent = android.content.Intent("com.example.screeenc.ORIENTATION_CHANGE").apply {
+            putExtra("landscape", landscape)
+        }
+        sendBroadcast(intent)
+        Log.i(TAG, "Broadcast sent to MainActivity")
+        
+        // Wait for activity to change orientation and display metrics to update
+        serviceScope.launch {
+            // First delay - let Android process the rotation
+            delay(300)
+            
+            // Re-read screen dimensions - they should have swapped
+            val displayMetrics = resources.displayMetrics
+            val newScreenWidth = displayMetrics.widthPixels
+            val newScreenHeight = displayMetrics.heightPixels
+            
+            Log.i(TAG, "After 300ms - Display metrics: ${newScreenWidth}x${newScreenHeight}")
+            Log.i(TAG, "Dimension change: (${screenWidth}x${screenHeight}) → (${newScreenWidth}x${newScreenHeight})")
+            
+            // If dimensions haven't changed, wait longer
+            if ((landscape && newScreenWidth <= newScreenHeight) || 
+                (!landscape && newScreenWidth > newScreenHeight)) {
+                Log.w(TAG, "Dimensions haven't updated yet, waiting another 300ms...")
+                delay(300)
+                
+                // Final read
+                val finalMetrics = resources.displayMetrics
+                val finalWidth = finalMetrics.widthPixels
+                val finalHeight = finalMetrics.heightPixels
+                Log.i(TAG, "After additional 300ms - Final display metrics: ${finalWidth}x${finalHeight}")
+                
+                screenWidth = finalWidth
+                screenHeight = finalHeight
+            } else {
+                screenWidth = newScreenWidth
+                screenHeight = newScreenHeight
+            }
+            
+            Log.i(TAG, "=== SCREEN DIMENSIONS UPDATED ===")
+            Log.i(TAG, "New screen: ${screenWidth}x${screenHeight}")
+            Log.i(TAG, "Target: ${if (landscape) "LANDSCAPE (W>H)" else "PORTRAIT (H>W)"}")
+            
+            // Recalculate surface dimensions with updated screen dimensions
+            val dimensions = calculateSurfaceDimensions()
+            val surfaceWidth = dimensions[0]
+            val surfaceHeight = dimensions[1]
+            val offsetX = dimensions[2]
+            val offsetY = dimensions[3]
+            
+            Log.i(TAG, "New surface layout: ${surfaceWidth}x${surfaceHeight} at (${offsetX}, ${offsetY})")
+            
+            // Update surface view position and size
+            surfaceView?.let {
+                val params = WindowManager.LayoutParams(
+                    surfaceWidth,
+                    surfaceHeight,
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                    } else {
+                        @Suppress("DEPRECATION")
+                        WindowManager.LayoutParams.TYPE_SYSTEM_ALERT
+                    },
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                            WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                            WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED or
+                            WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON,
+                    PixelFormat.TRANSLUCENT
+                ).apply {
+                    gravity = Gravity.TOP or Gravity.START
+                    x = offsetX
+                    y = offsetY
+                }
+                try {
+                    windowManager?.updateViewLayout(it, params)
+                    Log.i(TAG, "✓ Surface view layout updated successfully")
+                } catch (e: Exception) {
+                    Log.e(TAG, "✗ ERROR updating surface layout", e)
+                }
+            }
+            
+            // Update button colors to reflect active orientation
+            portraitButton?.setBackgroundColor(
+                android.graphics.Color.parseColor(if (!landscape) "#2196F3" else "#757575")
+            )
+            landscapeButton?.setBackgroundColor(
+                android.graphics.Color.parseColor(if (landscape) "#2196F3" else "#757575")
+            )
+            Log.i(TAG, "✓ Button colors updated")
+            
+            Log.i(TAG, ">>> setOrientation COMPLETE: ${if (landscape) "LANDSCAPE" else "PORTRAIT"} <<<")
+        }
     }
 
     /**
-     * Remove surface view and close button
+     * Remove surface view and all overlays
      */
     private fun removeSurfaceView() {
+        Log.i(TAG, ">>> removeSurfaceView called - cleaning up all overlays <<<")
+        
         try {
+            // Remove portrait button
+            portraitButton?.let {
+                try {
+                    Log.d(TAG, "Removing portrait button...")
+                    windowManager?.removeView(it)
+                    Log.d(TAG, "✓ Portrait button removed")
+                } catch (e: Exception) {
+                    Log.e(TAG, "✗ Error removing portrait button", e)
+                }
+            }
+            portraitButton = null
+            
+            // Remove landscape button
+            landscapeButton?.let {
+                try {
+                    Log.d(TAG, "Removing landscape button...")
+                    windowManager?.removeView(it)
+                    Log.d(TAG, "✓ Landscape button removed")
+                } catch (e: Exception) {
+                    Log.e(TAG, "✗ Error removing landscape button", e)
+                }
+            }
+            landscapeButton = null
+            
+            // Remove close button
             closeButton?.let {
-                windowManager?.removeView(it)
+                try {
+                    Log.d(TAG, "Removing close button...")
+                    windowManager?.removeView(it)
+                    Log.d(TAG, "✓ Close button removed")
+                } catch (e: Exception) {
+                    Log.e(TAG, "✗ Error removing close button", e)
+                }
             }
             closeButton = null
             
+            // Remove surface view (MUST be removed before background view)
             surfaceView?.let {
-                windowManager?.removeView(it)
+                try {
+                    Log.d(TAG, "Removing surface view...")
+                    windowManager?.removeView(it)
+                    Log.d(TAG, "✓ Surface view removed")
+                } catch (e: Exception) {
+                    Log.e(TAG, "✗ Error removing surface view", e)
+                }
             }
             surfaceView = null
+            
+            // CRITICAL: Remove background view LAST - it fills entire screen!
+            backgroundView?.let {
+                try {
+                    Log.d(TAG, "Removing background view (CRITICAL - fills screen)...")
+                    windowManager?.removeView(it)
+                    Log.d(TAG, "✓ Background view removed")
+                } catch (e: Exception) {
+                    Log.e(TAG, "✗ Error removing background view - THIS CAUSES DARK SCREEN", e)
+                }
+            }
+            backgroundView = null
+            
+            Log.i(TAG, ">>> ALL OVERLAYS REMOVED SUCCESSFULLY <<<")
         } catch (e: Exception) {
-            Log.e(TAG, "Error removing surface view", e)
+            Log.e(TAG, "✗ Critical error in removeSurfaceView", e)
         }
     }
 
