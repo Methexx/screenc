@@ -34,30 +34,43 @@ class TcpVideoReceiver(
 
     /**
      * Connect to the TCP server
+     * Works over USB via ADB reverse port forwarding - NO WIFI/MOBILE DATA NEEDED
      */
     suspend fun connect(): Boolean = withContext(Dispatchers.IO) {
         try {
-            Log.i(TAG, "Connecting to $host:$port...")
-            Log.i(TAG, "Port value before socket: $port (type: ${port::class.simpleName})")
+            Log.i(TAG, "Connecting to $host:$port via USB (localhost)...")
+            Log.i(TAG, "⚠️ Note: Connection uses USB cable only, NOT WiFi/mobile data")
             
             val address = InetSocketAddress(host, port)
             Log.i(TAG, "InetSocketAddress created: ${address.hostString}:${address.port}")
 
             socket = Socket().apply {
-                // IMPORTANT: Only set timeout during connection, NOT for reading
-                // Keep reading indefinitely without timeout
+                // Configure socket for USB-only communication
                 keepAlive = true
                 tcpNoDelay = true // Disable Nagle's algorithm for lower latency
+                reuseAddress = true // Allow socket reuse for reconnections
+                
                 Log.i(TAG, "About to connect to: ${address.hostString}:${address.port}")
-                connect(address, CONNECTION_TIMEOUT)
-                // After connection, disable read timeout
+                try {
+                    connect(address, CONNECTION_TIMEOUT)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Connection attempt failed: ${e.message}")
+                    Log.i(TAG, "Make sure:")
+                    Log.i(TAG, "1. USB cable is connected")
+                    Log.i(TAG, "2. ADB reverse is configured: adb reverse tcp:27183 tcp:27183")
+                    Log.i(TAG, "3. Windows sender is running on PC")
+                    throw e
+                }
+                
+                // After connection, disable read timeout for continuous streaming
                 soTimeout = 0 // 0 = infinite timeout for reading
             }
 
             inputStream = socket?.getInputStream()
             isRunning = true
 
-            Log.i(TAG, "Connected successfully")
+            Log.i(TAG, "✅ Connected successfully via USB!")
+            Log.i(TAG, "✅ You can now turn off WiFi and mobile data - stream uses USB only")
             onConnectionStateChanged?.invoke(true, null)
             true
         } catch (e: IOException) {

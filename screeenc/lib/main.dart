@@ -36,7 +36,7 @@ class _ReceiverScreenState extends State<ReceiverScreen> {
   static const eventChannel = EventChannel('com.example.screeenc/video_status');
 
   String _status = 'Idle';
-  String _statusMessage = 'Waiting for USB connection...';
+  String _statusMessage = '📱 USB Streaming - NO WiFi/Mobile Data Used!\nConnect USB and turn on any network interface to start.';
   bool _isStreaming = false;
   int _frameCount = 0;
   DateTime? _lastUpdate;

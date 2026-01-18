@@ -1,11 +1,20 @@
 # Video Streaming Project - Setup & Test Guide
 
-## Project Status: ✅ WORKING
+## Project Status: ✅ WORKING - USB-ONLY STREAMING
 
 ### Overview
 - **Android Receiver**: Flutter app that receives H.264 video via TCP and displays on screen
 - **Windows Sender**: Dart console app that streams H.264 video over TCP
-- **Connection**: USB via ADB reverse port forwarding (127.0.0.1:27183)
+- **Connection**: **USB via ADB reverse port forwarding (NO WiFi/Mobile Data Used!)**
+- **Data Transfer**: 100% through USB cable, 0% through internet/WiFi/mobile data
+
+### 🎯 Important: Network Usage Clarification
+- ✅ **Video streaming**: 100% via USB cable
+- ✅ **WiFi/Mobile data**: 0% used for streaming
+- ⚠️ **Initial requirement**: Android OS requires network interface to be "enabled" (security check)
+- ✅ **After connection**: You can turn off WiFi and mobile data - streaming continues!
+
+**See [USB_STREAMING_EXPLAINED.md](USB_STREAMING_EXPLAINED.md) for complete technical details.**
 
 ---
 
