@@ -6,7 +6,7 @@ A USB-only screen sharing solution that captures Windows desktop screen and stre
 
 Stream live Windows desktop screen to Android device through USB connection with minimal latency, using officially supported APIs without kernel-level access or security bypasses.
 
----
+--- 
 
 ## 📋 Project Status
 
